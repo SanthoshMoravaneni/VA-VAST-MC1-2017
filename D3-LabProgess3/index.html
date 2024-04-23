@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Monthly Gate Traffic by Car Type</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .chart {
+            width: 960px;
+            height: 500px;
+        }
+        .line {
+            fill: none;
+            stroke-width: 2px;
+        }
+        .axis-label {
+            font: 12px sans-serif;
+        }
+        .car-type-selector {
+            cursor: pointer;
+            margin: 5px;
+            padding: 5px;
+            display: inline-block;
+            color: white;
+            font-weight: bold;
+        }
+        .car-type-selector:hover, .car-type-selector.active {
+            opacity: 0.75;
+        }
+        .year-divider {
+            stroke: black;
+            stroke-width: 1px;
+            stroke-dasharray: 5,5;
+        }
+        .year-label {
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .peak-point {
+            fill: rgb(15, 16, 16);
+            stroke: none;
+            r: 5;
+        }
+        .peak-label {
+            font-size: 12px;
+            fill: black;
+            text-anchor: middle;
+        }
+    </style>
+</head>
+<body>
+    <h1>Monthly Gate Traffic by Car Type</h1>
+    <div id="selectors"></div>
+    <div id="lineChart" class="chart"></div>
+    <script>
+        d3.csv("Modified_Lekagul_Sensor_Data.csv").then(function(data) {
+            const parseTime = d3.timeParse("%d-%m-%Y %H:%M:%S");
+            data.forEach(d => {
+                d.Timestamp = parseTime(d.Timestamp);
+                if (!d.Timestamp) {
+                    console.error("Invalid date format:", d.Timestamp);
+                }
+            });
+
+            const validData = data.filter(d => d.Timestamp);
+
+            const countPerMonthGateCarType = Array.from(d3.rollup(validData,
+                v => v.length,
+                d => `${d.Timestamp.getFullYear()}-${d.Timestamp.getMonth() + 1}`,
+                d => d['gate-name'],
+                d => d['car-type']),
+                ([month, gates]) => ({ month, gates: Array.from(gates, ([gate, carTypes]) => ({ gate, carTypes: Array.from(carTypes, ([carType, count]) => ({ carType, count })) })) }));
+
+            const carTypes = Array.from(new Set(validData.map(d => d['car-type'])));
+            const colorScale = d3.scaleOrdinal(d3.schemeCategory10).domain(carTypes);
+
+            const selectors = d3.select('#selectors');
+            selectors.append('div').text("All").attr('class', 'car-type-selector active')
+                .style("background-color", "#aaa") // Neutral color for 'All'
+                .on('click', function() {
+                    d3.selectAll('.car-type-selector').classed('active', false);
+                    d3.select(this).classed('active', true);
+                    updateChart();
+                });
+            carTypes.forEach(type => {
+                selectors.append('div').text(type).attr('class', 'car-type-selector')
+                .style("background-color", colorScale(type)) // Color matching the line color
+                    .on('click', function() {
+                        d3.selectAll('.car-type-selector').classed('active', false);
+                        d3.select(this).classed('active', true);
+                        updateChart(type);
+                    });
+            });
+
+            const margin = {top: 40, right: 20, bottom: 50, left: 70},
+                  width = 960 - margin.left - margin.right,
+                  height = 500 - margin.top - margin.bottom,
+                  svg = d3.select("#lineChart").append("svg")
+                          .attr("width", width + margin.left + margin.right)
+                          .attr("height", height + margin.top + margin.bottom)
+                          .append("g")
+                          .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            const x = d3.scalePoint().range([0, width]).domain(countPerMonthGateCarType.map(d => d.month));
+            const y = d3.scaleLinear().range([height, 0]).domain([0, 20000]);
+
+            // Append the x-axis with month names formatted from the month number
+            svg.append("g")
+               .attr("transform", `translate(0,${height})`)
+               .call(d3.axisBottom(x).tickFormat((d) => {
+                    const monthIndex = parseInt(d.split("-")[1]) - 1;
+                    const year = d.split("-")[0];
+                    return d3.timeFormat("%B")(new Date(year, monthIndex));
+                }));
+
+            svg.append("g").call(d3.axisLeft(y));
+
+            const dividerPosition = x("2016-1");
+            if (dividerPosition) {
+                svg.append("line")
+                   .attr("x1", dividerPosition)
+                   .attr("x2", dividerPosition)
+                   .attr("y1", 0)
+                   .attr("y2", height)
+                   .attr("class", "year-divider");
+                svg.append("text")
+                   .attr("x", dividerPosition / 2)
+                   .attr("y", 30)
+                   .attr("class", "year-label")
+                   .text("2015");
+                svg.append("text")
+                   .attr("x", dividerPosition + (width - dividerPosition) / 2)
+                   .attr("y", 30)
+                   .attr("class", "year-label")
+                   .text("2016");
+            }
+
+            function updateChart(selectedCarType = null) {
+                const linesData = selectedCarType ? 
+                    countPerMonthGateCarType.map(d => ({
+                        month: d.month,
+                        value: d3.sum(d.gates.flatMap(g => g.carTypes.filter(ct => ct.carType === selectedCarType)), ct => ct.count)
+                    })) :
+                    carTypes.map(carType => ({
+                        carType,
+                        values: countPerMonthGateCarType.map(d => ({
+                            month: d.month,
+                            value: d3.sum(d.gates.flatMap(g => g.carTypes.filter(ct => ct.carType === carType)), ct => ct.count)
+                        }))
+                    }));
+
+                svg.selectAll(".line, .peak-point, .peak-label").remove(); // Clear previous lines, points, and labels
+
+                if (selectedCarType) {
+                    const line = d3.line().x(d => x(d.month)).y(d => y(d.value)).curve(d3.curveMonotoneX);
+                    svg.append("path").datum(linesData).attr("class", "line").attr("d", line).attr("stroke", colorScale(selectedCarType));
+
+                    const maxValue = d3.max(linesData, d => d.value);
+                    const peakPoint = linesData.find(d => d.value === maxValue);
+                    svg.append("circle").attr("cx", x(peakPoint.month)).attr("cy", y(peakPoint.value)).attr("r", 5).attr("class", "peak-point");
+                    svg.append("text").attr("x", x(peakPoint.month)).attr("y", y(peakPoint.value) - 10).attr("class", "peak-label").text(`Peak: ${maxValue}`);
+                } else {
+                    carTypes.forEach(carType => {
+                        const values = linesData.find(d => d.carType === carType).values;
+                        const line = d3.line().x(d => x(d.month)).y(d => y(d.value)).curve(d3.curveMonotoneX);
+                        svg.append("path").datum(values).attr("class", "line").attr("d", line).attr("stroke", colorScale(carType));
+
+                        const maxValue = d3.max(values, d => d.value);
+                        const peakPoint = values.find(d => d.value === maxValue);
+                        svg.append("circle").attr("cx", x(peakPoint.month)).attr("cy", y(peakPoint.value)).attr("r", 5).attr("class", "peak-point");
+                        svg.append("text").attr("x", x(peakPoint.month)).attr("y", y(peakPoint.value) - 10).attr("class", "peak-label").text(`Peak: ${maxValue}`);
+                    });
+                }
+            }
+
+            updateChart(); // Initially load chart with all car types
+        });
+    </script>
+</body>
+</html>
