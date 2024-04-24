@@ -54,7 +54,7 @@
     <div id="selectors"></div>
     <div id="lineChart" class="chart"></div>
     <script>
-        d3.csv("Modified_Lekagul_Sensor_Data.csv").then(function(data) {
+        d3.csv("Lekagul_Sensor_Data.csv").then(function(data) {
             const parseTime = d3.timeParse("%d-%m-%Y %H:%M:%S");
             data.forEach(d => {
                 d.Timestamp = parseTime(d.Timestamp);
